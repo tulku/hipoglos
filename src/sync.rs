@@ -23,12 +23,13 @@ pub async fn run_sync_loop(
     db.initialize()?;
     let client = reqwest::Client::new();
 
-    if db.get_meta("mirror_color_v3")?.is_none() {
-        tracing::info!("Running mirror style migration (v3)...");
+    let color_fp = color_fingerprint(config);
+    if db.get_meta("mirror_color_fp")?.as_deref() != Some(&color_fp) {
+        tracing::info!("Color config changed — running mirror style migration...");
         match migrate_mirror_style(&db, &client, config, client_id, client_secret).await {
             Ok(n) => {
                 tracing::info!("Mirror style migration complete: {} mirrors updated", n);
-                db.set_meta("mirror_color_v3", "done")?;
+                db.set_meta("mirror_color_fp", &color_fp)?;
             }
             Err(e) => {
                 tracing::error!("Mirror style migration failed: {:#}", e);
@@ -1007,4 +1008,14 @@ async fn migrate_mirror_style(
     }
 
     Ok(updated)
+}
+
+fn color_fingerprint(config: &crate::config::HipoglosConfig) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for cal in &config.calendars {
+        cal.email.hash(&mut h);
+        cal.color_id.hash(&mut h);
+    }
+    format!("{:x}", h.finish())
 }
