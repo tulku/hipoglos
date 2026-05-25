@@ -1,0 +1,21 @@
+services:
+  hipoglos:
+    image: ghcr.io/${GH_USER:-tulku}/hipoglos:latest
+    # For local development, build instead:
+    #   build:
+    #     context: .
+    #     dockerfile: Dockerfile
+    container_name: hipoglos
+    restart: unless-stopped
+    volumes:
+      - ./hipoglos_client_secret.json:/app/hipoglos_client_secret.json:ro
+      - ./config.toml:/app/config.toml
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=info
+
+    # setup: needs host networking for OAuth redirect to work
+    #   docker compose run --rm --network host hipoglos setup
+    #
+    # sync: runs normally
+    #   docker compose up -d
