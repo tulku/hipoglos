@@ -6,8 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
-const SYNC_OVERLAP_SECONDS: i64 = 60;
-
 pub struct SyncStats {
     pub created: usize,
     pub updated: usize,
@@ -136,7 +134,11 @@ async fn sync_calendar(
             });
     }
 
-    let updated_min = last_sync.unwrap_or_else(|| now.to_rfc3339());
+    // On first sync, look back 28 days to catch future events created earlier.
+    // Google Calendar rejects updatedMin beyond ~30 days (410).
+    let updated_min = last_sync.unwrap_or_else(|| {
+        (now - chrono::Duration::days(28)).to_rfc3339()
+    });
 
     let masters = calendar::list_events_sync(
         client,
@@ -221,6 +223,13 @@ async fn sync_calendar(
                 }
             }
         } else {
+            let current_version = event["updated"].as_str().unwrap_or("");
+            if let Some(stored) = db.get_event_version(&source.email, event_id)? {
+                if stored == current_version {
+                    continue;
+                }
+            }
+
             let mappings = db.get_mappings(&source.email, event_id)?;
 
             if mappings.is_empty() {
@@ -284,6 +293,12 @@ async fn sync_calendar(
                     }
                 }
             }
+
+            let _ = db.set_event_version(
+                &source.email,
+                event_id,
+                current_version,
+            );
         }
     }
 
@@ -370,12 +385,7 @@ async fn sync_calendar(
         }
     }
 
-    let overlap_time = now - chrono::Duration::seconds(SYNC_OVERLAP_SECONDS);
-    let new_sync_time = if latest_updated > overlap_time.to_rfc3339() {
-        overlap_time.to_rfc3339()
-    } else {
-        latest_updated
-    };
+    let new_sync_time = now.to_rfc3339();
 
     db.set_last_sync(&source.email, &new_sync_time)?;
 

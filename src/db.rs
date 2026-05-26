@@ -34,6 +34,12 @@ impl Database {
                 CREATE TABLE IF NOT EXISTS meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS event_versions (
+                    calendar_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    last_updated TEXT NOT NULL,
+                    PRIMARY KEY (calendar_id, event_id)
                 );",
             )
             .context("Failed to initialize database schema")?;
@@ -155,6 +161,52 @@ impl Database {
             result.push(row.context("Failed to read full mapping")?);
         }
         Ok(result)
+    }
+
+    pub fn get_event_version(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT last_updated FROM event_versions WHERE calendar_id = ?1 AND event_id = ?2",
+        )?;
+        match stmt.query_row(params![calendar_id, event_id], |row| row.get(0)) {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn set_event_version(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+        last_updated: &str,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO event_versions (calendar_id, event_id, last_updated)
+                 VALUES (?1, ?2, ?3)",
+                params![calendar_id, event_id, last_updated],
+            )
+            .context("Failed to set event version")?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn delete_event_version(
+        &self,
+        calendar_id: &str,
+        event_id: &str,
+    ) -> anyhow::Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM event_versions WHERE calendar_id = ?1 AND event_id = ?2",
+                params![calendar_id, event_id],
+            )
+            .context("Failed to delete event version")?;
+        Ok(())
     }
 }
 
