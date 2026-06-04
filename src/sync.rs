@@ -35,6 +35,20 @@ pub async fn run_sync_loop(
         }
     }
 
+    let content_version = "2";
+    if db.get_meta("mirror_content_version")?.as_deref() != Some(content_version) {
+        tracing::info!("Content version changed — deleting all mirror events for recreation with 'Busy' text...");
+        match migrate_mirror_content(&db, &client, config, client_id, client_secret).await {
+            Ok(n) => {
+                tracing::info!("Mirror content migration complete: {} mirror events deleted", n);
+                db.set_meta("mirror_content_version", content_version)?;
+            }
+            Err(e) => {
+                tracing::error!("Mirror content migration failed: {:#}", e);
+            }
+        }
+    }
+
     tracing::info!(
         "Sync engine started: {} calendars, {}s interval",
         config.calendars.len(),
@@ -458,7 +472,8 @@ async fn handle_updated_event(
     targets: &[&CalendarConfig],
     source_color: &str,
 ) -> anyhow::Result<usize> {
-    let update_body = calendar::build_mirror_update(event, &source.email, source_color);
+    let _ = source;
+    let update_body = calendar::build_mirror_update(event, source_color);
 
     let mut updated = 0;
 
@@ -1018,6 +1033,101 @@ async fn migrate_mirror_style(
     }
 
     Ok(updated)
+}
+
+async fn migrate_mirror_content(
+    db: &Database,
+    client: &reqwest::Client,
+    config: &crate::config::HipoglosConfig,
+    client_id: &str,
+    client_secret: &str,
+) -> anyhow::Result<usize> {
+    let mappings = db.get_all_mappings()?;
+    if mappings.is_empty() {
+        return Ok(0);
+    }
+
+    tracing::info!(
+        "Deleting {} existing mirror events to recreating with 'Busy' text...",
+        mappings.len()
+    );
+
+    let cal_configs: HashMap<&str, &CalendarConfig> = config
+        .calendars
+        .iter()
+        .map(|c| (c.email.as_str(), c))
+        .collect();
+
+    let mut access_tokens: HashMap<String, String> = HashMap::new();
+    let mut deleted = 0;
+
+    for mapping in &mappings {
+        let target_cfg = match cal_configs.get(mapping.target_calendar_id.as_str()) {
+            Some(c) => *c,
+            None => continue,
+        };
+
+        let target_access = match access_tokens.get(&target_cfg.email) {
+            Some(t) => t.clone(),
+            None => {
+                let mut token = TokenSet::load(&target_cfg.token_file)?;
+                let access = calendar::ensure_fresh_token(
+                    client,
+                    client_id,
+                    client_secret,
+                    &mut token,
+                    &target_cfg.token_file,
+                )
+                .await?;
+                access_tokens.insert(target_cfg.email.clone(), access.clone());
+                access
+            }
+        };
+
+        match calendar::delete_event(
+            client,
+            &target_access,
+            &target_cfg.calendar_id,
+            &mapping.target_event_id,
+        )
+        .await
+        {
+            Ok(()) => {
+                deleted += 1;
+                tracing::debug!(
+                    "Deleted mirror {} on {}",
+                    mapping.target_event_id,
+                    target_cfg.email
+                );
+            }
+            Err(e) => {
+                let err_str = format!("{:#}", e);
+                if err_str.contains("410") || err_str.contains("notFound") {
+                    tracing::debug!(
+                        "Mirror {} already gone on {}, counting as deleted.",
+                        mapping.target_event_id,
+                        target_cfg.email
+                    );
+                    deleted += 1;
+                } else {
+                    tracing::error!(
+                        "Failed to delete mirror {} on {}: {}",
+                        mapping.target_event_id,
+                        target_cfg.email,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    db.clear_all_mirror_data()?;
+    tracing::info!(
+        "Cleared all mirror state. {} events will be recreated on next sync.",
+        deleted
+    );
+
+    Ok(deleted)
 }
 
 fn color_fingerprint(config: &crate::config::HipoglosConfig) -> String {

@@ -48,16 +48,50 @@ async fn main() -> anyhow::Result<()> {
 async fn cmd_setup() -> anyhow::Result<()> {
     println!("=== hipoglos Calendar Sync Setup ===\n");
 
-    println!("This will authenticate you to {} Google accounts.", ACCOUNTS.len());
-    println!("You'll need {} separate browsers (or incognito/private windows):", ACCOUNTS.len());
-    for (i, &(email, _)) in ACCOUNTS.iter().enumerate() {
+    let config_path = Path::new(CONFIG_FILE);
+    let existing_config: Option<HipoglosConfig> = if config_path.exists() {
+        match HipoglosConfig::load(config_path) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("Failed to load existing config: {}. Will use defaults.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let accounts: Vec<(&str, u16)> = if let Some(ref config) = existing_config {
+        config
+            .calendars
+            .iter()
+            .enumerate()
+            .map(|(i, cal)| {
+                let port: u16 = 9876 + i as u16;
+                (cal.email.as_str(), port)
+            })
+            .collect()
+    } else {
+        ACCOUNTS.iter().map(|&(e, p)| (e, p)).collect()
+    };
+
+    println!("This will authenticate you to {} Google accounts.", accounts.len());
+    println!("You'll need {} separate browsers (or incognito/private windows):", accounts.len());
+    for (i, &(email, _)) in accounts.iter().enumerate() {
         println!("  {}. Browser {} → {}", i + 1, i + 1, email);
     }
     println!();
-    println!("IMPORTANT: If running on a remote machine via SSH, you must forward");
-    println!("ports 9876, 9877, 9878 back to your local browser:");
-    println!("  ssh -L 9876:localhost:9876 -L 9877:localhost:9877 -L 9878:localhost:9878 user@host");
-    println!();
+    if !accounts.is_empty() {
+        let ports: Vec<String> = accounts.iter().map(|(_, p)| p.to_string()).collect();
+        println!("IMPORTANT: If running on a remote machine via SSH, you must forward");
+        println!("ports {} back to your local browser:", ports.join(", "));
+        let forward: Vec<String> = accounts
+            .iter()
+            .map(|(_, p)| format!("-L {}:localhost:{}", p, p))
+            .collect();
+        println!("  ssh {}", forward.join(" "));
+        println!();
+    }
     println!("If the redirect doesn't work, the tool will prompt you to paste");
     println!("the authorization code manually from the browser's URL bar.");
     println!();
@@ -76,7 +110,7 @@ async fn cmd_setup() -> anyhow::Result<()> {
 
     let mut calendars: Vec<CalendarConfig> = Vec::new();
 
-    for &(email, port) in ACCOUNTS {
+    for &(email, port) in &accounts {
         let token_filename = format!("{}.json", email.replace('@', "_at_"));
         let token_path = Path::new(TOKENS_DIR).join(&token_filename);
 
@@ -98,11 +132,17 @@ async fn cmd_setup() -> anyhow::Result<()> {
             .await?;
         }
 
+        let existing_cal = existing_config
+            .as_ref()
+            .and_then(|cfg| cfg.calendars.iter().find(|c| c.email == email));
+
         calendars.push(CalendarConfig {
             email: email.to_string(),
-            calendar_id: "primary".to_string(),
+            calendar_id: existing_cal
+                .map(|c| c.calendar_id.clone())
+                .unwrap_or_else(|| "primary".to_string()),
             token_file: PathBuf::from(&token_path),
-            color_id: None,
+            color_id: existing_cal.and_then(|c| c.color_id.clone()),
         });
     }
 

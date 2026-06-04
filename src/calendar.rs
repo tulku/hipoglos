@@ -263,40 +263,7 @@ pub fn mirror_color(source_email: &str, configured: Option<&str>) -> String {
     colors[hash % colors.len()].to_string()
 }
 
-fn format_mirror_description(source_event: &serde_json::Value, source_calendar_id: &str) -> String {
-    let status_line = attendee_status_line(source_event);
 
-    let original_desc = source_event["description"].as_str().unwrap_or("");
-    let mut parts: Vec<&str> = Vec::new();
-    if !original_desc.is_empty() {
-        parts.push(original_desc);
-    }
-    if let Some(ref s) = status_line {
-        parts.push(s);
-    }
-    parts.push(&"Mirror from");
-    parts.push(source_calendar_id);
-    parts.push(&"(hipoglos)");
-
-    parts.join("\n")
-}
-
-fn attendee_status_line(event: &serde_json::Value) -> Option<String> {
-    let attendees = event["attendees"].as_array()?;
-    for a in attendees {
-        if a["self"].as_bool() == Some(true) {
-            let status = a["responseStatus"].as_str().unwrap_or("needsAction");
-            let label = match status {
-                "accepted" => "Accepted",
-                "declined" => "Declined",
-                "tentative" => "Tentative",
-                _ => "Pending",
-            };
-            return Some(format!("Status: {}", label));
-        }
-    }
-    None
-}
 
 pub fn build_mirror_body(
     source_event: &serde_json::Value,
@@ -305,18 +272,12 @@ pub fn build_mirror_body(
 ) -> serde_json::Value {
     let source_event_id = source_event["id"].as_str().unwrap_or("");
 
-    let original_summary = source_event["summary"].as_str().unwrap_or("(no title)");
-    let mirror_summary = format!("\u{2197} {}", original_summary);
-
-    let mirror_desc = format_mirror_description(source_event, source_calendar_id);
-
     let mut body = serde_json::json!({
         "visibility": "private",
         "transparency": "opaque",
         "colorId": color_id,
         "reminders": {"useDefault": false},
-        "summary": mirror_summary,
-        "description": mirror_desc,
+        "summary": "Busy",
         "extendedProperties": {
             "private": {
                 "mirrorSource": source_calendar_id,
@@ -338,19 +299,13 @@ pub fn build_mirror_body(
 
 pub fn build_mirror_update(
     source_event: &serde_json::Value,
-    source_calendar_id: &str,
     color_id: &str,
 ) -> serde_json::Value {
-    let original_summary = source_event["summary"].as_str().unwrap_or("(no title)");
-    let mirror_summary = format!("\u{2197} {}", original_summary);
-
-    let mirror_desc = format_mirror_description(source_event, source_calendar_id);
-
     let mut body = serde_json::json!({
         "reminders": {"useDefault": false},
         "colorId": color_id,
-        "summary": mirror_summary,
-        "description": mirror_desc,
+        "summary": "Busy",
+        "description": "",
     });
 
     for field in &["start", "end", "location", "recurrence"] {

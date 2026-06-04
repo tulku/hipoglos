@@ -208,6 +208,17 @@ impl Database {
             .context("Failed to delete event version")?;
         Ok(())
     }
+
+    pub fn clear_all_mirror_data(&self) -> anyhow::Result<()> {
+        self.conn
+            .execute_batch(
+                "DELETE FROM event_mappings;
+                 DELETE FROM event_versions;
+                 DELETE FROM sync_state;",
+            )
+            .context("Failed to clear mirror data")?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
