@@ -35,13 +35,13 @@ pub async fn run_sync_loop(
         }
     }
 
-    let content_version = "2";
-    if db.get_meta("mirror_content_version")?.as_deref() != Some(content_version) {
-        tracing::info!("Content version changed — deleting all mirror events for recreation with 'Busy' text...");
+    let content_fp = mirror_content_fingerprint(config);
+    if db.get_meta("mirror_content_fp")?.as_deref() != Some(&content_fp) {
+        tracing::info!("Mirror content config changed — deleting all mirror events for recreation...");
         match migrate_mirror_content(&db, &client, config, client_id, client_secret).await {
             Ok(n) => {
                 tracing::info!("Mirror content migration complete: {} mirror events deleted", n);
-                db.set_meta("mirror_content_version", content_version)?;
+                db.set_meta("mirror_content_fp", &content_fp)?;
             }
             Err(e) => {
                 tracing::error!("Mirror content migration failed: {:#}", e);
@@ -271,7 +271,6 @@ async fn sync_calendar(
                 match handle_updated_event(
                     client,
                     &target_access,
-                    source,
                     event,
                     &mappings,
                     targets,
@@ -429,11 +428,17 @@ async fn handle_new_event(
     source_color: &str,
 ) -> anyhow::Result<usize> {
     let source_event_id = event["id"].as_str().context("Event missing id")?;
-    let mirror_body = calendar::build_mirror_body(event, &source.email, source_color);
 
     let mut created = 0;
 
     for target in targets {
+        let mirror_body = calendar::build_mirror_body(
+            event,
+            &source.email,
+            source_color,
+            &target.mirror_style,
+        );
+
         let access_token = target_access
             .get(&target.email)
             .context("Target access token missing")?;
@@ -466,15 +471,11 @@ async fn handle_new_event(
 async fn handle_updated_event(
     client: &reqwest::Client,
     target_access: &HashMap<String, String>,
-    source: &CalendarConfig,
     event: &serde_json::Value,
     mappings: &[MirrorMapping],
     targets: &[&CalendarConfig],
     source_color: &str,
 ) -> anyhow::Result<usize> {
-    let _ = source;
-    let update_body = calendar::build_mirror_update(event, source_color);
-
     let mut updated = 0;
 
     let target_map: HashMap<&str, &CalendarConfig> =
@@ -490,6 +491,8 @@ async fn handle_updated_event(
             Some(tok) => tok,
             None => continue,
         };
+
+        let update_body = calendar::build_mirror_update(event, source_color, &target.mirror_style);
 
         calendar::update_event(
             client,
@@ -715,11 +718,16 @@ async fn handle_new_recurring_from_instance(
         return Ok(0);
     }
 
-    let mirror_body = calendar::build_mirror_body(&master_event, &source.email, source_color);
-
     let mut created = 0;
 
     for target in targets {
+        let mirror_body = calendar::build_mirror_body(
+            &master_event,
+            &source.email,
+            source_color,
+            &target.mirror_style,
+        );
+
         let access_token = target_access
             .get(&target.email)
             .context("Target access token missing")?;
@@ -833,9 +841,14 @@ async fn seed_recurring_events(
             continue;
         }
 
-        let mirror_body = calendar::build_mirror_body(&master, &source.email, source_color);
-
         for target in targets {
+            let mirror_body = calendar::build_mirror_body(
+                &master,
+                &source.email,
+                source_color,
+                &target.mirror_style,
+            );
+
             let access_token = match target_access.get(&target.email) {
                 Some(t) => t,
                 None => continue,
@@ -1003,7 +1016,12 @@ async fn migrate_mirror_style(
 
         let migr_color =
             calendar::mirror_color(&source_cfg.email, source_cfg.color_id.as_deref());
-        let new_body = calendar::build_mirror_body(&source_event, &source_cfg.email, &migr_color);
+        let new_body = calendar::build_mirror_body(
+            &source_event,
+            &source_cfg.email,
+            &migr_color,
+            &target_cfg.mirror_style,
+        );
 
         match calendar::update_event(
             client,
@@ -1048,7 +1066,7 @@ async fn migrate_mirror_content(
     }
 
     tracing::info!(
-        "Deleting {} existing mirror events to recreating with 'Busy' text...",
+        "Deleting {} existing mirror events for recreation with updated styles...",
         mappings.len()
     );
 
@@ -1136,6 +1154,16 @@ fn color_fingerprint(config: &crate::config::HipoglosConfig) -> String {
     for cal in &config.calendars {
         cal.email.hash(&mut h);
         cal.color_id.hash(&mut h);
+    }
+    format!("{:x}", h.finish())
+}
+
+fn mirror_content_fingerprint(config: &crate::config::HipoglosConfig) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for cal in &config.calendars {
+        cal.email.hash(&mut h);
+        cal.mirror_style.hash(&mut h);
     }
     format!("{:x}", h.finish())
 }

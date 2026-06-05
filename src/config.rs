@@ -2,6 +2,19 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum MirrorStyle {
+    Busy,
+    Full,
+}
+
+impl Default for MirrorStyle {
+    fn default() -> Self {
+        MirrorStyle::Busy
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HipoglosConfig {
     pub poll_interval_seconds: u64,
@@ -15,6 +28,8 @@ pub struct CalendarConfig {
     pub token_file: PathBuf,
     #[serde(default)]
     pub color_id: Option<String>,
+    #[serde(default)]
+    pub mirror_style: MirrorStyle,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

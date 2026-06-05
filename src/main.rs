@@ -143,6 +143,9 @@ async fn cmd_setup() -> anyhow::Result<()> {
                 .unwrap_or_else(|| "primary".to_string()),
             token_file: PathBuf::from(&token_path),
             color_id: existing_cal.and_then(|c| c.color_id.clone()),
+            mirror_style: existing_cal
+                .map(|c| c.mirror_style.clone())
+                .unwrap_or_default(),
         });
     }
 
