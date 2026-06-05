@@ -4,7 +4,7 @@ This is 100% AI generated WITHOUT any code review. AI Slop. It just happens to w
 
 3-way Google Calendar sync engine. Keeps 3 calendars in sync: when an event is created, modified, or deleted on any of them, mirror events are automatically created/updated/deleted on the other two.
 
-Mirror events show as **"Busy"** to other people — title, description, and attendee details are hidden via `visibility: private`.
+Mirror events show as **"Busy"** by default (configurable per calendar) — title, description, and attendee details are hidden via `visibility: private`.
 
 ## How it works
 
@@ -25,7 +25,7 @@ Mirror events show as **"Busy"** to other people — title, description, and att
 
 - Polls each calendar at a configurable interval (default: 300s)
 - Detects new, modified, and cancelled events via the Google Calendar API
-- Creates mirrors with per-source `colorId` (configurable per calendar), `↗` title prefix, and source annotation in the description
+- Creates mirrors with per-source `colorId` (configurable per calendar) and per-target `mirror_style` (`busy` or `full`)
 - **Declined events are not mirrored** — if you declined the original event, no "busy" block is created (and existing mirrors are cleaned up)
 - Recurring events are mirrored with the same RRULE so all instances stay in sync
 - Individual cancelled instances of recurring events are handled
@@ -115,9 +115,12 @@ token_file = "data/tokens/your-work_at_company2.com.json"
 
 - `calendar_id` — `"primary"` for the default calendar, or a specific calendar ID from Google Calendar
 - `color_id` — (optional) Google Calendar color ID (`"1"`–`"11"`) for mirrors originating from this calendar. If unset, a muted color is chosen automatically based on a hash of the email
+- `mirror_style` — (optional, default `"busy"`) how mirror events appear when this calendar is a **target**:
+  - `"busy"` — summary is `"Busy"`, no description, private visibility (safe for work calendars)
+  - `"full"` — summary is `"↗ Original Title"`, includes original description and RSVP status (for personal calendar where you want to see details)
 - `poll_interval_seconds` — how often to check for changes (minimum ~10s to avoid rate limits)
 
-Example with custom colors:
+Example with custom colors and mirror styles:
 
 ```toml
 [[calendars]]
@@ -125,6 +128,12 @@ email = "your-work@company1.com"
 calendar_id = "primary"
 token_file = "data/tokens/your-work_at_company1.com.json"
 color_id = "3"   # Grape (purple) for events originating here
+
+[[calendars]]
+email = "your-personal@gmail.com"
+calendar_id = "primary"
+token_file = "data/tokens/your-personal_at_gmail.com.json"
+mirror_style = "full"   # show event details on personal calendar
 ```
 
 ## Commands
@@ -137,14 +146,14 @@ color_id = "3"   # Grape (purple) for events originating here
 
 ## Mirror event styling
 
-Mirror events are visually distinct from regular events:
+Mirror events are visually distinct from regular events and have per-target configurable detail level:
 
-- **`↗` prefix** in the title
-- **Per-source color** — default muted palette (Lavender, Grape, Graphite), or set `color_id` per calendar in `config.toml`
-- **No notifications** (`reminders.useDefault: false`)
-- **Private visibility** — others only see "Busy"
-- **Description** shows source calendar and your RSVP status from the original event
-- **Declined events** — not mirrored at all (no "busy" block when you declined)
+- **`busy` style** (default) — summary is `"Busy"`, no description, private visibility. Safe for work calendars where you don't want to leak meeting details.
+- **`full` style** — `↗` prefix in the title, per-source color, description shows source calendar and your RSVP status from the original event.
+- **Common to both styles:**
+  - **Private visibility** — others only see "Busy"
+  - **No notifications** (`reminders.useDefault: false`)
+  - **Declined events** — not mirrored at all (no "busy" block when you declined)
 
 ## Logging
 
