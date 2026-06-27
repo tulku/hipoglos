@@ -40,6 +40,8 @@ pub struct TokenSet {
     pub expires_in: i64,
     pub scope: String,
     pub token_type: String,
+    #[serde(default)]
+    pub obtained_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,8 +89,11 @@ impl TokenSet {
         }
         let content =
             serde_json::to_string_pretty(self).context("Failed to serialize token")?;
-        std::fs::write(path, content)
-            .with_context(|| format!("Failed to write token to {}", path.display()))?;
+        let tmp_path = path.with_extension("tmp");
+        std::fs::write(&tmp_path, content)
+            .with_context(|| format!("Failed to write token to {}", tmp_path.display()))?;
+        std::fs::rename(&tmp_path, path)
+            .with_context(|| format!("Failed to rename token to {}", path.display()))?;
         Ok(())
     }
 }

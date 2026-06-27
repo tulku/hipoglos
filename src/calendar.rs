@@ -2,7 +2,9 @@ use crate::config::TokenSet;
 use crate::config::MirrorStyle;
 use crate::oauth;
 use anyhow::{bail, Context};
+use chrono::Utc;
 use serde::Deserialize;
+use std::time::Duration;
 
 const CALENDAR_API_BASE: &str = "https://www.googleapis.com/calendar/v3";
 
@@ -34,15 +36,70 @@ pub async fn ensure_fresh_token(
     token: &mut TokenSet,
     token_path: &std::path::Path,
 ) -> anyhow::Result<String> {
+    if let Some(obtained_at) = token.obtained_at {
+        let now = Utc::now().timestamp();
+        let elapsed = now - obtained_at;
+        let margin: i64 = 300;
+        if elapsed < token.expires_in.saturating_sub(margin) {
+            return Ok(token.access_token.clone());
+        }
+    }
+
     let refresh_token = token
         .refresh_token
         .as_deref()
         .context("No refresh token stored. Re-run 'cargo run -- setup' to re-authenticate.")?;
-    let new_token =
-        oauth::refresh_access_token(client, client_id, client_secret, refresh_token).await?;
-    new_token.save(token_path)?;
-    *token = new_token;
-    Ok(token.access_token.clone())
+
+    let max_retries: u32 = 3;
+    let mut backoff = Duration::from_secs(1);
+
+    for attempt in 1..=max_retries {
+        match oauth::refresh_access_token(client, client_id, client_secret, refresh_token).await {
+            Ok(new_token) => {
+                new_token.save(token_path)?;
+                *token = new_token;
+                return Ok(token.access_token.clone());
+            }
+            Err(e) => {
+                let err_str = format!("{:#}", e);
+
+                if oauth::is_token_revoked_error(&err_str) {
+                    let revoked_path = token_path.with_extension("json.revoked");
+                    let _ = std::fs::rename(token_path, &revoked_path);
+                    tracing::warn!(
+                        "Refresh token revoked by Google. Moved to {}. \
+                         Re-run 'setup' to re-authenticate.",
+                        revoked_path.display()
+                    );
+                    bail!(
+                        "Token has been revoked for {}. Re-run 'cargo run -- setup'.",
+                        token_path.display()
+                    );
+                }
+
+                let is_transient = oauth::is_retryable_error(&err_str, None);
+                if is_transient && attempt < max_retries {
+                    tracing::warn!(
+                        "Token refresh {}/{} transient failure: {}. Retrying in {:?}...",
+                        attempt,
+                        max_retries,
+                        e,
+                        backoff
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff *= 2;
+                    continue;
+                }
+
+                return Err(e).context(format!(
+                    "Token refresh failed for {}",
+                    token_path.display()
+                ));
+            }
+        }
+    }
+
+    unreachable!()
 }
 
 pub async fn list_calendars(

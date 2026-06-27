@@ -1,7 +1,9 @@
 use crate::config::TokenSet;
 use anyhow::{bail, Context};
+use chrono::Utc;
 use rand::Rng;
 use reqwest::Client;
+use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
@@ -146,6 +148,42 @@ fn parse_code_from_paste(input: &str) -> Option<String> {
         return None;
     }
     Some(input.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleOAuthError {
+    error: String,
+}
+
+pub fn is_token_revoked_error(error_body: &str) -> bool {
+    if let Ok(err) = serde_json::from_str::<GoogleOAuthError>(error_body) {
+        err.error == "invalid_grant"
+    } else {
+        error_body.contains("invalid_grant")
+    }
+}
+
+pub fn is_retryable_error(error_msg: &str, status: Option<reqwest::StatusCode>) -> bool {
+    if let Some(code) = status {
+        if code.is_server_error() {
+            return true;
+        }
+        if code.is_client_error() && !is_token_revoked_error(error_msg) {
+            return false;
+        }
+    }
+    if error_msg.contains("HTTP 5") {
+        return true;
+    }
+    if error_msg.contains("HTTP 4") {
+        return false;
+    }
+    error_msg.contains("timeout")
+        || error_msg.contains("connection")
+        || error_msg.contains("tls")
+        || error_msg.contains("dns")
+        || error_msg.contains("reset")
+        || error_msg.contains("refused")
 }
 
 async fn obtain_code(
@@ -337,10 +375,12 @@ pub async fn exchange_code(
         bail!("Token exchange failed: {}", body);
     }
 
-    let token: TokenSet = resp
+    let mut token: TokenSet = resp
         .json()
         .await
         .context("Failed to parse token response")?;
+
+    token.obtained_at = Some(Utc::now().timestamp());
 
     if token.refresh_token.as_deref().unwrap_or("").is_empty() {
         bail!("No refresh token returned. Did you approve all scopes? Try re-authorizing.");
@@ -370,8 +410,9 @@ pub async fn refresh_access_token(
         .context("Failed to refresh token")?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        bail!("Token refresh failed: {}", body);
+        bail!("Token refresh failed (HTTP {}): {}", status.as_u16(), body);
     }
 
     let mut token: TokenSet = resp
@@ -380,6 +421,7 @@ pub async fn refresh_access_token(
         .context("Failed to parse refreshed token")?;
 
     token.refresh_token = Some(refresh_token.to_string());
+    token.obtained_at = Some(Utc::now().timestamp());
 
     Ok(token)
 }
