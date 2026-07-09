@@ -14,8 +14,14 @@ services:
     environment:
       - RUST_LOG=info
 
-    # setup: needs host networking for OAuth redirect to work
-    #   docker compose run --rm --network host hipoglos setup
+    # Run setup directly on the server (recommended — writes tokens into ./data):
+    #   docker compose run --rm hipoglos setup
+    #
+    # To force the manual paste flow (usually automatic inside container):
+    #   MANUAL_AUTH=1 docker compose run --rm hipoglos setup
+    #
+    # ( --network host is only needed if you want the automatic redirect listener
+    #   instead of manual code paste. Manual paste requires no port forwards.)
     #
     # sync: runs normally
     #   docker compose up -d

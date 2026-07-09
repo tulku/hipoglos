@@ -83,12 +83,47 @@ mkdir -p data/tokens
 # 2. Pull the pre-built image (or build locally with: docker compose build)
 docker compose pull
 
-# 3. Run setup (interactive — needs browser access, uses host networking)
-docker compose run --rm --network host hipoglos setup
+# 3. Run setup (interactive — works directly on the server)
+docker compose run --rm hipoglos setup
+# (See "Running setup from Docker on a server" below for details.
+#  No --network host or SSH port forwards are required.)
 
 # 4. Start the sync engine
 docker compose up -d
 ```
+
+### Running setup from Docker on a (remote) server
+
+This lets you generate tokens directly where the container will run, without
+copying files from your laptop:
+
+```bash
+# On the server / NAS (with hipoglos_client_secret.json and data/ in place)
+docker compose run --rm hipoglos setup
+```
+
+What happens:
+
+- The container prints an authorization URL for each account.
+- **On your laptop**, open each URL in a browser logged into the matching account
+  (separate incognito windows recommended).
+- Approve the Calendar permissions.
+- The browser redirects to a `localhost:...` address that will fail to connect.
+- Copy the **full URL** (or the `code=...` value) from the address bar.
+- Paste it back into the terminal where `docker compose run` is waiting.
+- Repeat for the other accounts.
+
+The tokens and `config.toml` are written straight into the mounted `./data` and
+`./config.toml` on the host. No SSH `-L` port forwards are needed.
+
+If the automatic "manual mode" does not engage for some reason, force it:
+
+```bash
+MANUAL_AUTH=1 docker compose run --rm hipoglos setup
+```
+
+(Host networking is only required if you specifically want the automatic
+browser-redirect listener instead of the paste flow.)
 
 ## Configuration
 

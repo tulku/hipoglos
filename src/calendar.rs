@@ -38,7 +38,7 @@ pub async fn ensure_fresh_token(
 ) -> anyhow::Result<String> {
     if let Some(obtained_at) = token.obtained_at {
         let now = Utc::now().timestamp();
-        let elapsed = now - obtained_at;
+        let elapsed = if now > obtained_at { now - obtained_at } else { 0 };
         let margin: i64 = 300;
         if elapsed < token.expires_in.saturating_sub(margin) {
             return Ok(token.access_token.clone());
@@ -63,7 +63,7 @@ pub async fn ensure_fresh_token(
             Err(e) => {
                 let err_str = format!("{:#}", e);
 
-                if oauth::is_token_revoked_error(&err_str) {
+                if oauth::is_token_revoked_error(&err_str) || err_str.contains("refresh_token_revoked") {
                     let revoked_path = token_path.with_extension("json.revoked");
                     let _ = std::fs::rename(token_path, &revoked_path);
                     tracing::warn!(
@@ -100,6 +100,55 @@ pub async fn ensure_fresh_token(
     }
 
     unreachable!()
+}
+
+/// Helper that ensures a fresh token, runs the provided async API operation,
+/// and retries *once* after forcing a refresh if the operation fails with
+/// what looks like an authentication error (e.g. 401, invalid_token).
+///
+/// This adds resilience for:
+/// - Clock skew between the machine and Google
+/// - Tokens that expire during a long sync cycle
+/// - Rare races where the cached access token becomes invalid
+#[allow(dead_code)]
+pub async fn with_auth_retry<F, Fut, T>(
+    client: &reqwest::Client,
+    client_id: &str,
+    client_secret: &str,
+    token: &mut TokenSet,
+    token_path: &std::path::Path,
+    mut operation: F,
+) -> anyhow::Result<T>
+where
+    F: FnMut(&str) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut access =
+        ensure_fresh_token(client, client_id, client_secret, token, token_path).await?;
+
+    match operation(&access).await {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            let err_str = format!("{err}");
+            let looks_like_auth_error = err_str.contains("401")
+                || err_str.contains("Unauthorized")
+                || err_str.contains("invalid_token")
+                || err_str.to_ascii_lowercase().contains("auth")
+                || err_str.contains("Bearer");
+
+            if looks_like_auth_error {
+                tracing::warn!(
+                    "API call failed with auth error ({}); forcing refresh and retrying once",
+                    err_str
+                );
+                access =
+                    ensure_fresh_token(client, client_id, client_secret, token, token_path).await?;
+                operation(&access).await
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 pub async fn list_calendars(

@@ -38,7 +38,9 @@ pub struct TokenSet {
     #[serde(default)]
     pub refresh_token: Option<String>,
     pub expires_in: i64,
+    #[serde(default)]
     pub scope: String,
+    #[serde(default)]
     pub token_type: String,
     #[serde(default)]
     pub obtained_at: Option<i64>,

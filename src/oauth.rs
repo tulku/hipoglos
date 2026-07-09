@@ -15,6 +15,16 @@ const OAUTH_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.readonly";
 
+fn running_in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::env::var_os("container").is_some()
+}
+
+fn force_manual_auth() -> bool {
+    std::env::var("MANUAL_AUTH").is_ok()
+        || std::env::var("FORCE_MANUAL_AUTH").is_ok()
+}
+
 fn redirect_uri(port: u16) -> String {
     format!("http://localhost:{}", port)
 }
@@ -156,11 +166,34 @@ struct GoogleOAuthError {
 }
 
 pub fn is_token_revoked_error(error_body: &str) -> bool {
-    if let Ok(err) = serde_json::from_str::<GoogleOAuthError>(error_body) {
-        err.error == "invalid_grant"
-    } else {
-        error_body.contains("invalid_grant")
+    let lower = error_body.to_ascii_lowercase();
+    if lower.contains("invalid_grant")
+        || lower.contains("expired or revoked")
+        || lower.contains("token has been expired or revoked")
+    {
+        return true;
     }
+
+    // Try direct JSON
+    if let Ok(err) = serde_json::from_str::<GoogleOAuthError>(error_body) {
+        if err.error == "invalid_grant" {
+            return true;
+        }
+    }
+
+    // Try to extract a JSON object from a wrapped error message
+    if let Some(start) = error_body.find('{') {
+        if let Some(end) = error_body.rfind('}') {
+            let json_part = &error_body[start..=end];
+            if let Ok(err) = serde_json::from_str::<GoogleOAuthError>(json_part) {
+                if err.error == "invalid_grant" {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 pub fn is_retryable_error(error_msg: &str, status: Option<reqwest::StatusCode>) -> bool {
@@ -206,6 +239,12 @@ async fn obtain_code(
     println!();
     println!("  {}", auth_url);
     println!();
+
+    if force_manual_auth() || running_in_container() {
+        println!("Container environment or MANUAL_AUTH=1 detected — using manual code entry (no listener).");
+        return manual_entry(client, client_id, client_secret, email, port, token_path)
+            .await;
+    }
 
     let listener = match bind_localhost(port) {
         Ok(l) => l,
@@ -290,11 +329,16 @@ async fn manual_entry(
 ) -> anyhow::Result<()> {
     println!();
     println!("--- Manual Authorization Code Entry ---");
-    println!("After approving in the browser, Google will try to redirect you to:");
-    println!("  http://localhost:{}?code=SOMETHING_LONG&scope=...&state=...", port);
+    println!("This mode is ideal when running inside Docker or on a remote server.");
     println!();
-    println!("The page likely won't load, but the authorization 'code' is visible");
-    println!("in the browser's URL bar. Copy the code value and paste it below.");
+    println!("1. From *your local computer*, open the URL printed above in a browser");
+    println!("   while logged into the target Google account (use a private/incognito");
+    println!("   window for each account).");
+    println!("2. Click through and approve the requested Calendar permissions.");
+    println!("3. Google will redirect to http://localhost:{}?... — this will fail to load.", port);
+    println!("4. In the browser address bar, copy the *full* current URL (or just the");
+    println!("   value of the 'code' parameter).");
+    println!("5. Paste it below.");
     println!();
     println!("(You can paste just the code, or the full URL — I'll extract the code)");
     println!();
@@ -412,6 +456,9 @@ pub async fn refresh_access_token(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        if is_token_revoked_error(&body) {
+            bail!("refresh_token_revoked: HTTP {}: {}", status.as_u16(), body);
+        }
         bail!("Token refresh failed (HTTP {}): {}", status.as_u16(), body);
     }
 
@@ -420,7 +467,11 @@ pub async fn refresh_access_token(
         .await
         .context("Failed to parse refreshed token")?;
 
-    token.refresh_token = Some(refresh_token.to_string());
+    // Preserve the existing refresh token unless Google returns a new one
+    // (supports refresh token rotation in case the provider starts using it).
+    if token.refresh_token.is_none() {
+        token.refresh_token = Some(refresh_token.to_string());
+    }
     token.obtained_at = Some(Utc::now().timestamp());
 
     Ok(token)

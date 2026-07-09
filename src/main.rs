@@ -48,6 +48,12 @@ async fn main() -> anyhow::Result<()> {
 async fn cmd_setup() -> anyhow::Result<()> {
     println!("=== hipoglos Calendar Sync Setup ===\n");
 
+    if std::env::var("MANUAL_AUTH").is_ok() || std::path::Path::new("/.dockerenv").exists() {
+        println!("Docker / manual auth mode active (MANUAL_AUTH=1 or running in container).");
+        println!("Auth URLs will be shown; paste codes from your local browser.");
+        println!();
+    }
+
     let config_path = Path::new(CONFIG_FILE);
     let existing_config: Option<HipoglosConfig> = if config_path.exists() {
         match HipoglosConfig::load(config_path) {
@@ -82,18 +88,20 @@ async fn cmd_setup() -> anyhow::Result<()> {
     }
     println!();
     if !accounts.is_empty() {
-        let ports: Vec<String> = accounts.iter().map(|(_, p)| p.to_string()).collect();
-        println!("IMPORTANT: If running on a remote machine via SSH, you must forward");
-        println!("ports {} back to your local browser:", ports.join(", "));
+        let _ports: Vec<String> = accounts.iter().map(|(_, p)| p.to_string()).collect();
+        println!("NOTE: Port forwarding (ssh -L) is only required for the *automatic* browser");
+        println!("redirect listener. For Docker or remote server runs, manual code paste works");
+        println!("without any port forwards — just copy the printed auth URLs to your local");
+        println!("browser and paste the resulting ?code=... back here.");
         let forward: Vec<String> = accounts
             .iter()
             .map(|(_, p)| format!("-L {}:localhost:{}", p, p))
             .collect();
-        println!("  ssh {}", forward.join(" "));
+        println!("  (If you want auto-redirect: ssh {})", forward.join(" "));
         println!();
     }
-    println!("If the redirect doesn't work, the tool will prompt you to paste");
-    println!("the authorization code manually from the browser's URL bar.");
+    println!("If the redirect doesn't work (or you're in Docker), the tool will prompt you");
+    println!("to paste the authorization code manually from the browser's URL bar.");
     println!();
 
     let client_secret_path = Path::new(CLIENT_SECRET_FILE);
